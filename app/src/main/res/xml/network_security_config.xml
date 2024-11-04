@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">esp32-stream</domain>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.107.165</domain> <!-- Replace with your ESP32's IP address -->
+    </domain-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <!-- Alternatively, use the ESP32's IP address directly -->
+    <!-- <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">192.168.x.x</domain>
+    </domain-config> -->
+</network-security-config>
