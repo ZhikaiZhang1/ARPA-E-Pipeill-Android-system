@@ -40,8 +40,11 @@ dependencies {
     implementation(libs.activity)
     implementation(libs.constraintlayout)
     implementation("com.arthenica:mobile-ffmpeg-full-gpl:4.4.LTS")
+//    implementation(":opencv")
+
 //    implementation("org.apache.jmdns:jmdns:3.5.5")
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
+
 }
