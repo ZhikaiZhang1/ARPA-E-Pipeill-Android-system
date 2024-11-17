@@ -31,11 +31,21 @@
         android:onClick="PLAY_VID"
         android:layout_marginTop="50dp" />
 
+    <Button
+        android:id="@+id/zipcreateButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Compress Video File"
+        android:layout_below="@id/selectVideoButton"
+        android:layout_centerHorizontal="true"
+        android:onClick="createZipOnESP32"
+        android:layout_marginTop="5dp" />
+
     <VideoView
         android:id="@+id/videoView"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_below="@id/selectVideoButton"
+        android:layout_below="@id/zipcreateButton"
         android:layout_marginTop="10dp" />
     <!--        android:visibility="gone" />-->
     <SeekBar

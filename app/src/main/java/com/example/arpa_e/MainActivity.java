@@ -24,6 +24,10 @@ import android.util.Log;
 import java.util.Calendar;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
+import android.os.Handler;
+import android.os.Looper;
+
 import android.provider.DocumentsContract;
 
 
@@ -32,6 +36,8 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import android.graphics.*;
 import android.view.*;
+import java.util.zip.*;
+import androidx.core.util.Pair;
 
 
 //permmisions
@@ -45,16 +51,20 @@ import androidx.core.content.ContextCompat;
 import android.widget.Button;
 import android.widget.Toast;
 
+
 public class MainActivity extends AppCompatActivity {
     private static final String ESP32_HOSTNAME = "esp32-stream.local"; // ESP32 mDNS hostname
     private String esp32Ip = null; // Store the discovered IP here
-    private static final String ESP32_URL = "http://192.168.141.165:1000/video"; // Change this to your ESP32's IP address
-    private static final String ESP32_URL_base = "http://192.168.141.165:1000/"; // Change this to your ESP32's IP address
-
+    private static final String ESP32_URL = "http://192.168.14.165:1000/video"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_base = "http://192.168.14.165:1000/"; // Change this to your ESP32's IP address
+    private static final String zip_create_cmd = "createzip";
     private VideoView videoView;
     private List<File> frames = new ArrayList<>();
     private List<String> timestamps = new ArrayList<>();
     private final Executor executor = Executors.newSingleThreadExecutor();
+    // Use an Executor for background execution
+    ExecutorService executor_zip = Executors.newSingleThreadExecutor();
+    Handler zipHandler = new Handler(Looper.getMainLooper());
     int frameRate = 10;
     private static final int PICK_VIDEO_REQUEST = 1;
 
@@ -206,8 +216,124 @@ public class MainActivity extends AppCompatActivity {
         createFileLauncher.launch(intent);
     }
 
+    private void unzipFile(String zipFilePath, String targetDirectoryPath) {
+        try {
+            ZipInputStream zipInput = new ZipInputStream(new BufferedInputStream(new FileInputStream(zipFilePath)));
+            ZipEntry zipEntry;
+
+            while ((zipEntry = zipInput.getNextEntry()) != null) {
+                Log.d("unzipping", "unzipping file: "+ zipEntry.getName());
+                File file = new File(targetDirectoryPath, zipEntry.getName());
+
+                if (zipEntry.isDirectory()) {
+                    file.mkdirs();
+                } else {
+                    FileOutputStream fileOutput = new FileOutputStream(file);
+                    byte[] buffer = new byte[1024];
+                    int bytesRead;
+                    while ((bytesRead = zipInput.read(buffer)) != -1) {
+                        fileOutput.write(buffer, 0, bytesRead);
+                    }
+                    fileOutput.close();
+                }
+
+                zipInput.closeEntry();
+
+            }
+            zipInput.close();
+//            Toast.makeText(this, "Unzipping complete", Toast.LENGTH_SHORT).show();
+            Log.d("unzipping", "successfully unzipped file");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            Log.e("unzipping", "Error unzipping", e);
+//            Toast.makeText(this, "Unzipping failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+
+
+    private List<File> getFilesWithPrefix(String prefix) {
+        List<File> renamedFiles = new ArrayList<>();
+
+        // Directory where the unzipped files are stored
+        File directory = new File(framesDirectory.getAbsolutePath());
+
+        // Check if directory exists
+        if (directory.exists() && directory.isDirectory()) {
+            // List all files in the directory
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    String fileName = file.getName();
+
+                    // Match files starting with "frame_" and process them
+                    if (fileName.startsWith(prefix) && fileName.contains("_")) {
+                        // Extract "frame_<framenumber>" from the file name
+                        int secondUnderscoreIndex = fileName.indexOf("_", fileName.indexOf("_") + 1);
+                        if (secondUnderscoreIndex != -1) {
+                            String newFileName = fileName.substring(0, secondUnderscoreIndex) + ".jpg";  // Adjust extension if needed
+                            File newFile = new File(directory, newFileName);
+
+                            String timestamp = fileName.substring(secondUnderscoreIndex + 1, fileName.lastIndexOf('.'));
+                            timestamps.add(timestamp);
+
+                            // Rename the file
+                            if (file.renameTo(newFile)) {
+                                renamedFiles.add(newFile);  // Add the renamed file to the list
+                                Log.d("RenameSuccess", "Renamed to: " + newFile.getAbsolutePath());
+                            } else {
+                                Log.e("RenameError", "Failed to rename: " + file.getAbsolutePath());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Log.e("FileSearch", "Unzipped directory does not exist.");
+        }
+
+        return renamedFiles;
+    }
+
+    private void sortFilesAndTimestamps(List<File> fileList, List<String> timestampList) {
+        // Combine both lists into a single list of pairs
+        List<Pair<File, String>> pairedList = new ArrayList<>();
+        for (int i = 0; i < fileList.size(); i++) {
+            pairedList.add(new Pair<>(fileList.get(i), timestampList.get(i)));
+        }
+
+        // Sort the combined list by extracting the frame number from the filenames
+        Collections.sort(pairedList, new Comparator<Pair<File, String>>() {
+            @Override
+            public int compare(Pair<File, String> pair1, Pair<File, String> pair2) {
+                int frameNumber1 = extractFrameNumber(pair1.first.getName());
+                int frameNumber2 = extractFrameNumber(pair2.first.getName());
+                return Integer.compare(frameNumber1, frameNumber2);
+            }
+        });
+
+        // Clear and refill the original lists in sorted order
+        fileList.clear();
+        timestampList.clear();
+        for (Pair<File, String> pair : pairedList) {
+            fileList.add(pair.first);
+            timestampList.add(pair.second);
+        }
+    }
+
+    // Helper method to extract the frame number from a filename (e.g., "frame_001.jpg" -> 1)
+    private int extractFrameNumber(String fileName) {
+        try {
+            String frameNumberPart = fileName.substring(fileName.indexOf("_") + 1, fileName.lastIndexOf('.'));
+            return Integer.parseInt(frameNumberPart);
+        } catch (Exception e) {
+            Log.e("FrameNumberError", "Invalid frame number in filename: " + fileName);
+            return -1; // Default value for error cases
+        }
+    }
     private void downloadAndSaveVideo(Uri outputUri, String videoUrl) {
-        deleteExistingOutput(outputUri);
+//        deleteExistingOutput(outputUri);
         new Thread(() -> {
             try {
                 int frameNumber = 0;
@@ -223,102 +349,105 @@ public class MainActivity extends AppCompatActivity {
                 int count = 0;
                 long current_timestamp = 0;
                 long prev_timestamp = 0;
-                while(true){
-                    Log.d("VideoDownload", "Attempting to connect to ESP32 at " + videoUrl + " at address: " + esp32Ip);
+
+                Log.d("VideoDownload", "Attempting to connect to ESP32 at " + videoUrl + " at address: " + esp32Ip);
 //                    URL url = new URL(videoUrl);
-                    URL url = new URL(videoUrl + "?frame=" + frameNumber);
-                    HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                    connection.setRequestMethod("GET");
-                    connection.setConnectTimeout(5000);
-                    connection.setReadTimeout(5000);
-                    connection.connect();
-                    Log.d("VideoDownload", "after connect");
+                String zipFilePath = framesDirectory.getAbsolutePath() + "/images_with_timestamps.zip";
+                URL url = new URL(videoUrl + "?frame=" + frameNumber);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setConnectTimeout(5000);
+                connection.setReadTimeout(5000);
+                connection.connect();
+                Log.d("VideoDownload", "after connect");
 
-                    int code = connection.getResponseCode();
-                    if (code != HttpURLConnection.HTTP_OK) {
-                        Log.e("Download Error", "Server returned HTTP " + connection.getResponseCode());
-                        return;
-                    }
-                    Log.d("VideoDownload", "Connected to ESP32, starting download...");
+                int code = connection.getResponseCode();
+                if (code != HttpURLConnection.HTTP_OK) {
+                    Log.e("Download Error", "Server returned HTTP " + connection.getResponseCode());
+                    return;
+                }
+                Log.d("VideoDownload", "Connected to ESP32, starting download...");
 
-                    // Retrieve headers
-                    String timestamp = connection.getHeaderField("X-Timestamp");
-                    String framesLeftHeader = connection.getHeaderField("X-Frames-Left");
-                    int framesLeft = framesLeftHeader != null ? Integer.parseInt(framesLeftHeader) : 0;
 
-                    // Read the JPEG frame
-                    InputStream inputStream = connection.getInputStream();
+                InputStream inputStream_zip = new BufferedInputStream(connection.getInputStream());
+                FileOutputStream fileOutput = new FileOutputStream(zipFilePath);
 
-                    File frameFile = new File(framesDirectory, "frame_" + frameNumber + ".jpg");
-                    try (FileOutputStream fos = new FileOutputStream(frameFile)) {
-                        byte[] buffer = new byte[1024];
-                        int bytesRead;
-                        while ((bytesRead = inputStream.read(buffer)) != -1) {
-                            fos.write(buffer, 0, bytesRead);
-                        }
-                    } catch (Exception e) {
-                        Log.e("StreamDownload", "Error streaming single frame", e);
-                    }
-                    frames.add(frameFile);
-                    timestamps.add(timestamp);
-                    Log.d("VideoDownload", "Frame " + frameNumber + " with timestamp " + timestamp + " saved.");
-
-                    inputStream.close();
-                    connection.disconnect();
-
-                    // Check if more frames are left
-                    if (framesLeft == 0) {
-                        Log.d("VideoDownload", "All frames received, number of frames produced is: " + count);
-                        break;
-                    }
-                    // Increment frame number to request the next frame
-                    frameNumber++;
+                byte[] buffer_zip = new byte[1024];
+                int bytesRead_zip;
+                while ((bytesRead_zip = inputStream_zip.read(buffer_zip)) != -1) {
+                    fileOutput.write(buffer_zip, 0, bytesRead_zip);
                 }
 
-            // Convert frames to MP4
-            convertFramesToMp4WithTimestamps(frames, outputUri);
+                fileOutput.close();
+                inputStream_zip.close();
+                connection.disconnect();
 
-            deleteFrames(frames);
+                unzipFile(zipFilePath, framesDirectory.getAbsolutePath());
+                Log.d("unzipping", "finished unzipping");
+                frames = getFilesWithPrefix("frame_");
+                sortFilesAndTimestamps(frames, timestamps);
+
+                // Convert frames to MP4
+                convertFramesToMp4WithTimestamps(frames, outputUri);
+
+                deleteFrames(frames);
 
 //            runOnUiThread(() -> playVideo(outputUri));
-        } catch (Exception e) {
-            Log.e("StreamDownload", "Error streaming frames", e);
-        }
-    }).start();
-    }
-
-
-    private int findJpegStart(byte[] data) {
-        // Look for JPEG start marker: 0xFFD8
-        for (int i = 0; i < data.length - 1; i++) {
-            if ((data[i] & 0xFF) == 0xFF && (data[i + 1] & 0xFF) == 0xD8) {
-                return i;
+            } catch (Exception e) {
+                Log.e("StreamDownload", "Error streaming frames", e);
             }
-        }
-        return -1;
+        }).start();
     }
-    private void deleteExistingOutput(Uri outputUri) {
-        try {
-            getContentResolver().delete(outputUri, null, null);
-            Log.d("VideoOutput", "Existing video output deleted successfully.");
-        } catch (Exception e) {
-            Log.e("VideoOutput", "Error deleting old output file", e);
-        }
+
+    public void createZipOnESP32(View view) {
+        String zipcmdurl = ESP32_URL_base+zip_create_cmd;
+
+        executor_zip.execute(() -> {
+            String result;
+            try {
+                URL urlObj = new URL(zipcmdurl);
+                HttpURLConnection connection = (HttpURLConnection) urlObj.openConnection();
+                connection.setRequestMethod("GET");
+
+                int responseCode = connection.getResponseCode();
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    InputStream inputStream = connection.getInputStream();
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                    StringBuilder response = new StringBuilder();
+                    String line;
+
+                    while ((line = reader.readLine()) != null) {
+                        response.append(line);
+                    }
+
+                    reader.close();
+                    inputStream.close();
+                    result = response.toString();
+                } else {
+                    result = "Error: " + responseCode;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                result = "Error: " + e.getMessage();
+            }
+
+            // Update the UI on the main thread
+            String finalResult = result;
+            zipHandler.post(() -> {
+                if (finalResult.contains("successful")) {
+
+                    Toast.makeText(MainActivity.this, "ZIP created successfully!", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(MainActivity.this, "Failed to create ZIP. " + finalResult, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
     }
+
     private void refreshMediaStore(File file) {
         Intent scanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
         scanIntent.setData(Uri.fromFile(file));
         sendBroadcast(scanIntent);
-    }
-
-    private int findJpegEnd(byte[] data) {
-        // Look for JPEG end marker: 0xFFD9
-        for (int i = 0; i < data.length - 1; i++) {
-            if ((data[i] & 0xFF) == 0xFF && (data[i + 1] & 0xFF) == 0xD9) {
-                return i + 1;
-            }
-        }
-        return -1;
     }
 
     private String parseTimestampFromHeaders(byte[] data) {
@@ -381,20 +510,6 @@ public class MainActivity extends AppCompatActivity {
             String ffmpegCommand =
                     "-loglevel verbose -framerate "+frameRate+" -y -i "+framesDirectory+"/frame_repeated_%d.jpg -r 30 -c:v libx264 "+ mp4File.getAbsolutePath();
 
-//            -f concat -safe 0 -i /data/user/0/com.example.arpa_e/cache/ffmpeg_input_list.txt -vsync vfr -pix_fmt yuv420p -c:v libx264 -y -loglevel debug /data/user/0/com.example.arpa_e/cache/video_converted_new.mp4
-//            /data/user/0/com.example.arpa_e/cache/video_converted_new.mp4
-//            FFmpeg.setLogLevel(FFmpeg.LOG_LEVEL_VERBOSE);
-
-//            File file = new File(frames.get(10).getAbsolutePath());
-//            if (file.exists()) {
-//                Log.d("ListFileContent", "file " + frames.get(10).getAbsolutePath() + " does exist");
-//            } else {
-//                // File does not exist
-//                Log.d("ListFileContent", "file " + frames.get(10).getAbsolutePath() + " doesn't exist");
-//
-//            }
-//
-//            Log.d("ListFileContent", "Total frames: " + frames.size());
 
             try{
                 int ffmpeg_returns = FFmpeg.execute(ffmpegCommand);
@@ -454,273 +569,6 @@ public class MainActivity extends AppCompatActivity {
                     // Handle the permission denial
                 }
             });
-
-    public void createVideo_MediaCodec(List<File> files, Uri outputUri, ContentResolver contentResolver, int width, int height, int frameRate, Context context) throws IOException {
-        File tempFile = null;
-        try {
-            // Create a temporary file if API level is below 26
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                tempFile = new File(context.getCacheDir(), "temp_video.mp4");
-            }
-
-            // Configure the video format and encoder
-            MediaFormat format = MediaFormat.createVideoFormat("video/avc", width, height);
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 1000000); // Adjust as needed
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1); // 1-second interval for keyframes
-
-            MediaCodec codec = MediaCodec.createEncoderByType("video/avc");
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-
-            // Create a Surface for the encoder
-            Surface surface = codec.createInputSurface();
-            codec.start();
-
-            // Initialize MediaMuxer based on API level
-            MediaMuxer muxer;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try (OutputStream outputStream = contentResolver.openOutputStream(outputUri)) {
-                    if (outputStream == null) {
-                        Log.e(TAG, "Unable to open output stream for URI: " + outputUri);
-                        return;
-                    }
-                    FileDescriptor fileDescriptor = ((FileOutputStream) outputStream).getFD();
-                    muxer = new MediaMuxer(fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-                }
-            } else {
-                muxer = new MediaMuxer(tempFile.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-            }
-
-            MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-            boolean isMuxerStarted = false;
-            int trackIndex = -1;
-
-            // Encode each file as a frame
-//            checkAndRequestPermissions();
-
-            for (File file : files) {
-//                checkAndRequestPermissions();
-                Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
-                if (bitmap == null) {
-                    Log.e(TAG, "Failed to decode Bitmap from file: " + file.getAbsolutePath());
-                    continue; // Skip files that can't be loaded as Bitmaps
-                }
-
-                // Draw the Bitmap onto the encoder surface
-                Canvas canvas = surface.lockCanvas(null);
-                canvas.drawBitmap(bitmap, 0, 0, null);
-                surface.unlockCanvasAndPost(canvas);
-                bitmap.recycle(); // Free memory
-
-                // Retrieve and write the encoded frame to the muxer
-                while (true) {
-                    int encoderStatus = codec.dequeueOutputBuffer(bufferInfo, 10000);
-                    if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        break; // No output available yet
-                    } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        if (isMuxerStarted) {
-                            Log.e(TAG, "Format changed twice. Exiting.");
-                            return;
-                        }
-                        MediaFormat newFormat = codec.getOutputFormat();
-                        trackIndex = muxer.addTrack(newFormat);
-                        muxer.start();
-                        isMuxerStarted = true;
-                    } else if (encoderStatus >= 0) {
-                        ByteBuffer encodedData = codec.getOutputBuffer(encoderStatus);
-                        if (encodedData == null) {
-                            Log.e(TAG, "Encoder output buffer was null");
-                            return;
-                        }
-
-                        // Write the encoded frame to the muxer
-                        if (bufferInfo.size != 0) {
-                            encodedData.position(bufferInfo.offset);
-                            encodedData.limit(bufferInfo.offset + bufferInfo.size);
-                            muxer.writeSampleData(trackIndex, encodedData, bufferInfo);
-                        }
-
-                        codec.releaseOutputBuffer(encoderStatus, false);
-
-                        // Break after encoding each frame
-                        if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                            Log.d(TAG, "End of stream reached.");
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Finish encoding and release resources
-            codec.signalEndOfInputStream();
-            codec.stop();
-            codec.release();
-
-            if (isMuxerStarted) {
-                muxer.stop();
-            }
-            muxer.release();
-
-            // If using a temporary file, copy it to the output URI
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && tempFile != null) {
-                try (OutputStream outputStream = contentResolver.openOutputStream(outputUri);
-                     FileInputStream inputStream = new FileInputStream(tempFile)) {
-                    if (outputStream == null) {
-                        Log.e(TAG, "Failed to open output stream to URI for copying temp file.");
-                        return;
-                    }
-
-                    byte[] buffer = new byte[1024];
-                    int length;
-                    while ((length = inputStream.read(buffer)) > 0) {
-                        outputStream.write(buffer, 0, length);
-                    }
-                    Log.d(TAG, "Video successfully copied to output URI.");
-                }
-                // Delete the temporary file
-                if (!tempFile.delete()) {
-                    Log.w(TAG, "Failed to delete temporary file: " + tempFile.getAbsolutePath());
-                }
-            }
-
-        } catch (IOException e) {
-            Log.e(TAG, "IOException occurred: " + e.getMessage(), e);
-        } catch (Exception e) {
-            Log.e(TAG, "Unexpected error: " + e.getMessage(), e);
-        }
-    }
-public static void encodeImagesToMp4(List<File> imageFiles, String outputFilePath) throws Exception {
-    Log.i(TAG, "Starting to encode images to MP4...");
-
-    // Initialize MediaCodec and MediaMuxer
-    MediaCodec codec = createMediaCodec();
-    MediaMuxer muxer = createMediaMuxer(outputFilePath);
-
-    int videoTrackIndex = -1;
-    long timestampUs = 0;
-
-    // Loop through each image and encode it
-    for (int i = 0; i < imageFiles.size(); i++) {
-        File imageFile = imageFiles.get(i);
-
-        Log.i(TAG, "Processing image " + (i + 1) + " of " + imageFiles.size() + ": " + imageFile.getName());
-
-        // Read the image file into a byte buffer (assuming it's a JPEG)
-        byte[] imageData = readImage(imageFile);
-        Log.d(TAG, "Image data read successfully, size: " + imageData.length + " bytes");
-
-        // Encode the image and write the encoded data to the muxer
-        videoTrackIndex = encodeImageToVideo(codec, muxer, imageData, videoTrackIndex, timestampUs);
-        timestampUs += 1000000 / FRAME_RATE; // 1 second divided by the frame rate
-
-        Log.d(TAG, "Timestamp updated: " + timestampUs);
-    }
-
-    // Finalize the video encoding process
-    stopAndReleaseResources(codec, muxer);
-
-    Log.i(TAG, "MP4 file created at: " + outputFilePath);
-}
-
-    private static MediaCodec createMediaCodec() throws Exception {
-        Log.i(TAG, "Creating MediaCodec for encoding...");
-
-        // Try to create the encoder by MIME type
-        MediaCodec codec = null;
-        try {
-            codec = MediaCodec.createEncoderByType(VIDEO_MIME_TYPE);
-            Log.i(TAG, "MediaCodec created successfully with MIME type: " + VIDEO_MIME_TYPE);
-        } catch (IOException e) {
-            Log.e(TAG, "Failed to create MediaCodec with MIME type: " + VIDEO_MIME_TYPE, e);
-            throw new Exception("Failed to create MediaCodec", e);
-        }
-
-        // Create and configure the format
-        MediaFormat format = MediaFormat.createVideoFormat(VIDEO_MIME_TYPE, VIDEO_WIDTH, VIDEO_HEIGHT);
-        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar);
-        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE);
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL);  // I-frames every 5 seconds
-
-        // Configure the codec
-        try {
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            codec.start();
-            Log.i(TAG, "MediaCodec configured and started successfully.");
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to configure or start MediaCodec.", e);
-            throw new Exception("Failed to configure MediaCodec", e);
-        }
-
-        return codec;
-    }
-
-
-    private static MediaMuxer createMediaMuxer(String outputFilePath) throws Exception {
-        Log.i(TAG, "Creating MediaMuxer for output file: " + outputFilePath);
-        return new MediaMuxer(outputFilePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-    }
-
-    private static byte[] readImage(File imageFile) throws Exception {
-        Log.d(TAG, "Reading image file: " + imageFile.getAbsolutePath());
-        FileInputStream fis = new FileInputStream(imageFile);
-        byte[] imageData = new byte[(int) imageFile.length()];
-        fis.read(imageData);
-        fis.close();
-        Log.d(TAG, "Image file read successfully.");
-        return imageData;
-    }
-
-    private static int encodeImageToVideo(MediaCodec codec, MediaMuxer muxer, byte[] imageData, int videoTrackIndex, long timestampUs) throws Exception {
-        Log.d(TAG, "Encoding image to video, timestamp: " + timestampUs);
-        ByteBuffer inputBuffer = ByteBuffer.wrap(imageData);
-
-        // Get input buffer and queue the image data
-        MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-        int inputBufferIndex = codec.dequeueInputBuffer(-1);
-        if (inputBufferIndex >= 0) {
-            ByteBuffer codecInputBuffer = codec.getInputBuffer(inputBufferIndex);
-            codecInputBuffer.clear();
-            codecInputBuffer.put(inputBuffer);
-            codec.queueInputBuffer(inputBufferIndex, 0, inputBuffer.remaining(), timestampUs, 0);
-            Log.d(TAG, "Input buffer queued, index: " + inputBufferIndex);
-        } else {
-            Log.w(TAG, "No input buffer available, skipping this frame");
-        }
-
-        // Retrieve the encoded data from the output buffer
-        int outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000);
-        while (outputBufferIndex >= 0) {
-            ByteBuffer outputBuffer = codec.getOutputBuffer(outputBufferIndex);
-
-            if (videoTrackIndex == -1) {
-                // Add video track to muxer if it's not added already
-                MediaFormat outputFormat = codec.getOutputFormat();
-                videoTrackIndex = muxer.addTrack(outputFormat);
-                muxer.start();
-                Log.i(TAG, "Video track added to muxer.");
-            }
-
-            // Write encoded data to the muxer
-            muxer.writeSampleData(videoTrackIndex, outputBuffer, bufferInfo);
-            codec.releaseOutputBuffer(outputBufferIndex, false);
-            Log.d(TAG, "Output buffer released, index: " + outputBufferIndex);
-
-            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000);
-        }
-
-        return videoTrackIndex;
-    }
-
-    private static void stopAndReleaseResources(MediaCodec codec, MediaMuxer muxer) {
-        Log.i(TAG, "Stopping and releasing resources...");
-        codec.stop();
-        codec.release();
-        muxer.stop();
-        muxer.release();
-        Log.i(TAG, "Resources released successfully.");
-    }
 
 private void deleteFrames(List<File> frames) {
     for (File frame : frames) {
