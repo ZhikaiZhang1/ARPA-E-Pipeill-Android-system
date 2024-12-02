@@ -5,6 +5,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.VideoView;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -27,6 +28,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import android.os.Handler;
 import android.os.Looper;
+import android.widget.TextView;
+import java.util.concurrent.CountDownLatch;
 
 import android.provider.DocumentsContract;
 
@@ -50,21 +53,37 @@ import androidx.annotation.NonNull;
 import androidx.core.content.ContextCompat;
 import android.widget.Button;
 import android.widget.Toast;
-
-
+import android.database.Cursor;
+import androidx.documentfile.provider.DocumentFile;
+//192.168.134.42
 public class MainActivity extends AppCompatActivity {
     private static final String ESP32_HOSTNAME = "esp32-stream.local"; // ESP32 mDNS hostname
     private String esp32Ip = null; // Store the discovered IP here
-    private static final String ESP32_URL = "http://192.168.14.165:1000/video"; // Change this to your ESP32's IP address
-    private static final String ESP32_URL_base = "http://192.168.14.165:1000/"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera1 = "http://192.168.8.241:1000/video"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera1_base = "http://192.168.8.241:1000/"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera2 = "http://192.168.134.42:1001/video"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera2_base = "http://192.168.134.42:1001/"; // Change this to your ESP32's IP address
     private static final String zip_create_cmd = "createzip";
+    private static final String mode_cmd = "mode_select";
+
     private VideoView videoView;
     private List<File> frames = new ArrayList<>();
     private List<String> timestamps = new ArrayList<>();
     private final Executor executor = Executors.newSingleThreadExecutor();
     // Use an Executor for background execution
-    ExecutorService executor_zip = Executors.newSingleThreadExecutor();
+//    ExecutorService executor_zip = Executors.newSingleThreadExecutor();
     Handler zipHandler = new Handler(Looper.getMainLooper());
+    ExecutorService executor_zip = Executors.newFixedThreadPool(2);
+    ExecutorService executor_mode = Executors.newFixedThreadPool(2);
+
+    private TextView syncStatusESP32_1, syncStatusESP32_2;
+    private TextView downloadPercentageESP32_1, downloadPercentageESP32_2;
+    private TextView modeESP32_1, modeESP32_2;
+
+    private Handler download_update_handler = new Handler(Looper.getMainLooper());
+    private Runnable updateDownloadTask;
+
+
     int frameRate = 10;
     private static final int PICK_VIDEO_REQUEST = 1;
 
@@ -76,17 +95,6 @@ public class MainActivity extends AppCompatActivity {
     private static final int FRAME_RATE = 10;  // Frames per second
     private static final int BIT_RATE = 5000000;  // Bitrate for video (5Mbps)
     private static final int I_FRAME_INTERVAL = 5; // I-frames every 5 seconds
-
-    // ActivityResultLauncher for the create file action
-    private final ActivityResultLauncher<Intent> createFileLauncher =
-            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
-                    Uri uri = result.getData().getData();
-                    if (uri != null) {
-                        downloadAndSaveVideo(uri,ESP32_URL);// "http://" + esp32Ip + ":1000/video");
-                    }
-                }
-            });
 
     private ActivityResultLauncher<Intent> pickVideoLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
@@ -114,6 +122,62 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         videoView = findViewById(R.id.videoView);
         discoverESP32Ip();
+
+        syncStatusESP32_1 = findViewById(R.id.syncStatusESP32_1);
+        syncStatusESP32_2 = findViewById(R.id.syncStatusESP32_2);
+
+        downloadPercentageESP32_1 = findViewById(R.id.downloadPercentageESP32_1);
+        downloadPercentageESP32_2 = findViewById(R.id.downloadPercentageESP32_2);
+        modeESP32_1 = findViewById(R.id.modeESP32_1);
+        modeESP32_2 = findViewById(R.id.modeESP32_2);
+        updateStatus("Not Synced", "Not Synced", "0%", "0%", "WIFI", "WIFI");
+    }
+
+    private void updateDownloadStatusWithHandler(String download1, String download2) {
+        if (updateDownloadTask != null) {
+            download_update_handler.removeCallbacks(updateDownloadTask); // Cancel previous task if it's already queued
+        }
+
+        updateDownloadTask = () -> {
+            if (!download1.equals("NONE")) {
+                downloadPercentageESP32_1.setText(download1);
+            }
+            if (!download2.equals("NONE")) {
+                downloadPercentageESP32_2.setText(download2);
+            }
+        };
+
+        download_update_handler.postDelayed(updateDownloadTask, 100); // Schedule update after 100ms
+    }
+    private void updateSynchStatus(String sync1, String sync2) {
+        if (!sync1.equals("NONE")) {
+            syncStatusESP32_1.setText(sync1);
+        }
+        if (!sync2.equals("NONE")) {
+            syncStatusESP32_2.setText(sync2);
+        }
+    }
+    private void updateDownloadStatus(String download1, String download2) {
+        if (!download1.equals("NONE")) {
+            downloadPercentageESP32_1.setText(download1);
+        }
+        if (!download2.equals("NONE")) {
+            downloadPercentageESP32_2.setText(download2);
+        }
+    }
+    private void updateModeStatus(String mode1, String mode2) {
+        if (!mode1.equals("NONE")) {
+            modeESP32_1.setText(mode1);
+        }
+        if (!mode2.equals("NONE")) {
+            modeESP32_2.setText(mode2);
+        }
+    }
+
+    private void updateStatus(String sync1, String sync2, String download1, String download2, String mode1, String mode2) {
+        updateSynchStatus(sync1,sync2);
+        updateDownloadStatus(download1,download2);
+        updateModeStatus(mode1,mode2);
     }
 
     public void downloadVideo(View view) {
@@ -161,23 +225,61 @@ public class MainActivity extends AppCompatActivity {
         executor.execute(new Runnable() {
             @Override
             public void run() {
-                String result = sendSyncTimeRequest(year, month, day, hour, minute, second, millisecond);
+                String result1 = sendSyncTimeRequest(year, month, day, hour, minute, second, millisecond, 0);
+                String result2 = sendSyncTimeRequest(year, month, day, hour, minute, second, millisecond, 1);
+
 
                 // Update UI on the main thread
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(MainActivity.this, result, Toast.LENGTH_LONG).show();
-                    }
-                });
+//                runOnUiThread(new Runnable() {
+//                    @Override
+//                    public void run() {
+//                        Toast.makeText(MainActivity.this, result1 + " " + result2, Toast.LENGTH_LONG).show();
+//                    }
+//                });
             }
         });
     }
 
-    private String sendSyncTimeRequest(int year, int month, int day, int hour, int minute, int second, int millisecond) {
+    private void handleESP32Response(String response) {
+//        ImageView camera1Checkmark = findViewById(R.id.camera1Checkmark);
+//        ImageView camera2Checkmark = findViewById(R.id.camera2Checkmark);
+        if (response.contains("Time synchronized successfully for camera 1")) {
+//            camera1Checkmark.setVisibility(View.VISIBLE);
+            updateSynchStatus("Synced", "NONE");
+        } else if (response.contains("Time synchronized successfully for camera 2")) {
+//            camera2Checkmark.setVisibility(View.VISIBLE);
+            updateSynchStatus("NONE", "Synced");
+
+        } else {
+            Toast.makeText(this, "Unexpected response: " + response, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private int getESP32ResponseID(String response) {
+        if (response.contains("camera_1")) {
+            return 1;
+        } else if (response.contains("camera_2")) {
+            return 2;
+        } else {
+            return 0;
+        }
+    }
+
+    private String sendSyncTimeRequest(int year, int month, int day, int hour, int minute, int second, int millisecond, int CameraID) {
+        String camera_str = "Camera "+(CameraID+1);
+
         try {
             // Construct URL and Open Connection
-            String synch_time_url = ESP32_URL_base+"syncTime";
+            String synch_time_url;
+            if (CameraID == 0){
+                synch_time_url = ESP32_URL_camera1_base+"syncTime";
+            }
+            if (CameraID == 1){
+                synch_time_url = ESP32_URL_camera2_base+"syncTime";
+            }
+            else{
+                synch_time_url = ESP32_URL_camera1_base+"syncTime";
+            }
             URL url = new URL(synch_time_url);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
@@ -196,25 +298,40 @@ public class MainActivity extends AppCompatActivity {
             // Get the response
             int responseCode = connection.getResponseCode();
             if (responseCode == HttpURLConnection.HTTP_OK) {
-                return "Time synchronized successfully";
+                // Read the response
+                InputStream inputStream = connection.getInputStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
+                }
+                reader.close();
+
+                // Pass the response to the handler on the main thread
+                String esp32Response = response.toString();
+                runOnUiThread(() -> handleESP32Response(esp32Response));
+
+                return camera_str + " Time synchronized successfully";
             } else {
                 return "Failed to synchronize time";
             }
 
         } catch (Exception e) {
             Log.e("SyncTime", "Error syncing time", e);
-            return "Error syncing time";
+            return camera_str + " Error syncing time";
         }
     }
 
     private void saveFile(String videoUrl) {
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("video/mp4"); // MIME type for your video
         String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
-        intent.putExtra(Intent.EXTRA_TITLE, "esp32video"+timestamp+".mp4");
-        createFileLauncher.launch(intent);
+        String filename = "esp32video"+timestamp+".mp4";
+        downloadAndSaveVideo(filename,ESP32_URL_camera1);
+        downloadAndSaveVideo(filename,ESP32_URL_camera2);
+
+
     }
+
 
     private void unzipFile(String zipFilePath, String targetDirectoryPath) {
         try {
@@ -223,17 +340,28 @@ public class MainActivity extends AppCompatActivity {
 
             while ((zipEntry = zipInput.getNextEntry()) != null) {
                 Log.d("unzipping", "unzipping file: "+ zipEntry.getName());
+                Log.d("unzipping", "writing into: "+ targetDirectoryPath);
+
+
                 File file = new File(targetDirectoryPath, zipEntry.getName());
+
 
                 if (zipEntry.isDirectory()) {
                     file.mkdirs();
+                    Log.d("unzipping", "zipEntry.isDirectory()");
+
                 } else {
+                    Log.d("unzipping", "before FileOutputStream");
                     FileOutputStream fileOutput = new FileOutputStream(file);
+                    Log.d("unzipping", "after FileOutputStream");
+
                     byte[] buffer = new byte[1024];
                     int bytesRead;
                     while ((bytesRead = zipInput.read(buffer)) != -1) {
                         fileOutput.write(buffer, 0, bytesRead);
                     }
+                    Log.d("unzipping", "after reading FileOutputStream");
+
                     fileOutput.close();
                 }
 
@@ -253,11 +381,11 @@ public class MainActivity extends AppCompatActivity {
 
 
 
-    private List<File> getFilesWithPrefix(String prefix) {
+    private List<File> getFilesWithPrefix(String prefix, String frames_dir) {
         List<File> renamedFiles = new ArrayList<>();
 
         // Directory where the unzipped files are stored
-        File directory = new File(framesDirectory.getAbsolutePath());
+        File directory = new File(frames_dir);
 
         // Check if directory exists
         if (directory.exists() && directory.isDirectory()) {
@@ -332,13 +460,135 @@ public class MainActivity extends AppCompatActivity {
             return -1; // Default value for error cases
         }
     }
-    private void downloadAndSaveVideo(Uri outputUri, String videoUrl) {
+
+    public Uri appendStringToUriName(Uri uri, String prefix) {
+        if (uri == null || prefix == null) return uri;
+
+        // Get the last segment (the name) of the URI
+        String lastSegment = uri.getLastPathSegment();
+        if (lastSegment == null) return uri; // No name to append to
+
+        // Add the prefix
+        String modifiedName = prefix + lastSegment;
+
+        // Rebuild the URI with the modified name
+        Uri baseUri = uri.buildUpon().path(null).build(); // Remove the last path segment
+        return baseUri.buildUpon().appendPath(modifiedName).build();
+    }
+
+    public static File createDirectoryIfNotExists(File parent_dir, String directoryName) {
+        // Create a new File object for the target directory
+        File targetDir = new File(parent_dir, directoryName);
+
+        // Check if the directory exists
+        if (!targetDir.exists()) {
+            // Attempt to create the directory
+            if (targetDir.mkdirs()) {
+                System.out.println("Directory created: " + targetDir.getAbsolutePath());
+            } else {
+                System.err.println("Failed to create directory: " + targetDir.getAbsolutePath());
+            }
+        } else {
+            System.out.println("Directory already exists: " + targetDir.getAbsolutePath());
+        }
+
+        return targetDir;
+    }
+
+    public static boolean prependToFileName(Context context, Uri fileUri, String prefix) {
+        DocumentFile documentFile = DocumentFile.fromSingleUri(context, fileUri);
+
+        if (documentFile != null && documentFile.canWrite()) {
+            String originalName = documentFile.getName();
+            if (originalName != null) {
+                String newName = prefix + originalName;
+                return documentFile.renameTo(newName);
+            }
+        }
+
+        return false; // Could not rename the file
+    }
+
+    /**
+     * Converts the URI to a file path, if possible.
+     *
+     * @param context The context to get the ContentResolver.
+     * @param uri     The URI of the file.
+     * @return The file path, or null if it cannot be determined.
+     */
+    private static String getFilePathFromUri(Context context, Uri uri) {
+        String filePath = null;
+
+        // Handle different types of URIs based on API level
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && DocumentsContract.isDocumentUri(context, uri)) {
+            String documentId = DocumentsContract.getDocumentId(uri);
+            String[] split = documentId.split(":");
+            String type = split[0];
+
+            if ("primary".equalsIgnoreCase(type)) {
+                filePath = context.getExternalFilesDir(null) + "/" + split[1];
+            }
+        } else {
+            // For older versions of Android or non-document URIs
+            String[] projection = { android.provider.MediaStore.Images.Media.DATA };
+            Cursor cursor = context.getContentResolver().query(uri, projection, null, null, null);
+            if (cursor != null) {
+                int columnIndex = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATA);
+                cursor.moveToFirst();
+                filePath = cursor.getString(columnIndex);
+                cursor.close();
+            }
+        }
+
+        return filePath;
+    }
+
+    public static void addTimestampToImageFile(File imageFile, String timestamp, File outputFile) {
+        try {
+            // Step 1: Load the image file into a Bitmap
+            Bitmap bitmap = BitmapFactory.decodeFile(imageFile.getAbsolutePath());
+
+            // Step 2: Create a mutable Bitmap if it's not mutable
+            Bitmap mutableBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true);
+
+            // Step 3: Create a Canvas to draw on the mutable Bitmap
+            Canvas canvas = new Canvas(mutableBitmap);
+
+            // Step 4: Set up the Paint object for drawing text
+            Paint paint = new Paint();
+            paint.setColor(Color.YELLOW); // Set text color to yellow
+            paint.setTextSize(50); // Set text size (adjust as needed)
+            paint.setTypeface(Typeface.DEFAULT_BOLD); // Set font type
+            paint.setAntiAlias(true); // Enable anti-aliasing for smooth text
+
+            // Step 5: Set the position for the text (bottom left)
+            int xPos = 10;
+            int yPos = mutableBitmap.getHeight() - 30; // Adjust as needed
+
+            // Step 6: Draw the text (timestamp) on the image
+            canvas.drawText(timestamp, xPos, yPos, paint);
+
+            // Step 7: Save the modified Bitmap back to a new file (JPEG)
+            FileOutputStream out = new FileOutputStream(outputFile);
+            mutableBitmap.compress(Bitmap.CompressFormat.JPEG, 100, out); // Compress as JPEG (100 = highest quality)
+            out.flush();
+            out.close();
+
+            // Clean up
+            bitmap.recycle();
+            mutableBitmap.recycle();
+
+            // Optionally, you can return or display the modified image here
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+    private void downloadAndSaveVideo(String filename, String videoUrl) {
 //        deleteExistingOutput(outputUri);
         new Thread(() -> {
             try {
                 int frameNumber = 0;
-                File outputFile = new File(outputUri.getPath());
-//                File parentDir = outputFile.getParentFile();
                 File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 framesDirectory = new File(downloadsDir, "received_frames"); //getCacheDir();
                 Log.d("received_frames_dir", framesDirectory.getAbsolutePath());
@@ -346,13 +596,9 @@ public class MainActivity extends AppCompatActivity {
                 if (!framesDirectory.exists()) {
                     framesDirectory.mkdirs(); // Create the folder if it doesn't exist
                 }
-                int count = 0;
-                long current_timestamp = 0;
-                long prev_timestamp = 0;
 
                 Log.d("VideoDownload", "Attempting to connect to ESP32 at " + videoUrl + " at address: " + esp32Ip);
 //                    URL url = new URL(videoUrl);
-                String zipFilePath = framesDirectory.getAbsolutePath() + "/images_with_timestamps.zip";
                 URL url = new URL(videoUrl + "?frame=" + frameNumber);
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
@@ -362,33 +608,72 @@ public class MainActivity extends AppCompatActivity {
                 Log.d("VideoDownload", "after connect");
 
                 int code = connection.getResponseCode();
+                int CameraID = 0;
+                int fullFileSize = 0;
+                String esp32Response;
                 if (code != HttpURLConnection.HTTP_OK) {
                     Log.e("Download Error", "Server returned HTTP " + connection.getResponseCode());
                     return;
                 }
-                Log.d("VideoDownload", "Connected to ESP32, starting download...");
+                else {
+                    Log.d("VideoDownload", "Connected to ESP32, starting download...");
+                    String cameraIdHeader = connection.getHeaderField("Camera-Id");
+                    CameraID=Integer.parseInt(cameraIdHeader);
+
+                    String fullFileSizeHeader = connection.getHeaderField("Filesize");
+                    fullFileSize = Integer.parseInt(fullFileSizeHeader);
+//                    Log.d("VideoDownload", "camera id is: " + CameraID + " File size is: ");
+
+
+
+
+                }
+                String suffix_file = "_camera_"+CameraID;
+//                Uri outputUri_final = appendStringToUriName(outputUri, suffix_file);
+                String zip_folder_name = "/images_with_timestamps"+suffix_file;
+                String zipFilePath = framesDirectory.getAbsolutePath() + zip_folder_name+".zip";
+                Log.d("naming_files", "camera id is: " + CameraID + " output name: " + zipFilePath + " File size is: " + fullFileSize);
+
+                createDirectoryIfNotExists(framesDirectory, zip_folder_name);
+//                Log.d("naming_files", "after creating dirs");
+//                File downloadsDir_checking = Environment.getExternalStoragePublicDirectory(framesDirectory.getAbsolutePath());
+//                checkOrCreateDirectory(downloadsDir_checking,zip_folder_name);
+
 
 
                 InputStream inputStream_zip = new BufferedInputStream(connection.getInputStream());
                 FileOutputStream fileOutput = new FileOutputStream(zipFilePath);
 
+                Log.d("download_bytes", "starting downloading bytes!!!");
+
                 byte[] buffer_zip = new byte[1024];
                 int bytesRead_zip;
+                int all_bytes_rad = 0;
                 while ((bytesRead_zip = inputStream_zip.read(buffer_zip)) != -1) {
                     fileOutput.write(buffer_zip, 0, bytesRead_zip);
+                    all_bytes_rad+=bytesRead_zip;
+
+                    if (CameraID==1) {
+                        updateDownloadStatusWithHandler(String.valueOf( Math.round((float) all_bytes_rad/fullFileSize*100))+"%","NONE");
+                    }
+                    else if (CameraID==2) {
+                        updateDownloadStatusWithHandler("NONE", String.valueOf(Math.round((float) all_bytes_rad/fullFileSize*100))+"%");
+                    }
+                    Log.d("download_bytes", "download progress is: " + (float) all_bytes_rad/fullFileSize);
+
                 }
 
                 fileOutput.close();
                 inputStream_zip.close();
                 connection.disconnect();
 
-                unzipFile(zipFilePath, framesDirectory.getAbsolutePath());
+                unzipFile(zipFilePath, framesDirectory.getAbsolutePath()+zip_folder_name);
                 Log.d("unzipping", "finished unzipping");
-                frames = getFilesWithPrefix("frame_");
+                frames = getFilesWithPrefix("frame_", framesDirectory.getAbsolutePath()+zip_folder_name);
                 sortFilesAndTimestamps(frames, timestamps);
 
                 // Convert frames to MP4
-                convertFramesToMp4WithTimestamps(frames, outputUri);
+                convertFramesToMp4WithTimestamps(frames, filename, framesDirectory.getAbsolutePath()+zip_folder_name, suffix_file);
 
                 deleteFrames(frames);
 
@@ -399,62 +684,117 @@ public class MainActivity extends AppCompatActivity {
         }).start();
     }
 
-    public void createZipOnESP32(View view) {
-        String zipcmdurl = ESP32_URL_base+zip_create_cmd;
+    public void zipcreation_send(int CameraID){
+        String zipcmdurl;
+        if (CameraID==0) {
+            zipcmdurl = ESP32_URL_camera1_base + zip_create_cmd;
+        }
+        else {
+            zipcmdurl = ESP32_URL_camera2_base + zip_create_cmd;
+        }
 
-        executor_zip.execute(() -> {
-            String result;
-            try {
-                URL urlObj = new URL(zipcmdurl);
-                HttpURLConnection connection = (HttpURLConnection) urlObj.openConnection();
-                connection.setRequestMethod("GET");
+        String result;
+        try {
+            URL urlObj = new URL(zipcmdurl);
+            HttpURLConnection connection = (HttpURLConnection) urlObj.openConnection();
+            connection.setRequestMethod("GET");
 
-                int responseCode = connection.getResponseCode();
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    InputStream inputStream = connection.getInputStream();
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-                    StringBuilder response = new StringBuilder();
-                    String line;
+            int responseCode = connection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                InputStream inputStream = connection.getInputStream();
+                BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                StringBuilder response = new StringBuilder();
+                String line;
 
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-
-                    reader.close();
-                    inputStream.close();
-                    result = response.toString();
-                } else {
-                    result = "Error: " + responseCode;
+                while ((line = reader.readLine()) != null) {
+                    response.append(line);
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
-                result = "Error: " + e.getMessage();
+
+                reader.close();
+                inputStream.close();
+                result = response.toString();
+            } else {
+                result = "Error: " + responseCode;
             }
+        } catch (Exception e) {
+            e.printStackTrace();
+            result = "Error: " + e.getMessage();
+        }
 
-            // Update the UI on the main thread
-            String finalResult = result;
-            zipHandler.post(() -> {
-                if (finalResult.contains("successful")) {
+        // Update the UI on the main thread
+        String finalResult = result;
+        zipHandler.post(() -> {
+            if (finalResult.contains("successful")) {
 
-                    Toast.makeText(MainActivity.this, "ZIP created successfully!", Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(MainActivity.this, "Failed to create ZIP. " + finalResult, Toast.LENGTH_LONG).show();
-                }
-            });
+                Toast.makeText(MainActivity.this, "Camera " + (CameraID +1)+" ZIP created successfully!", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(MainActivity.this, "Camera " + (CameraID +1)+" Failed to create ZIP. " + finalResult, Toast.LENGTH_LONG).show();
+            }
         });
+
+    }
+    public void createZipOnESP32(View view) {
+        Runnable camera1Task = () -> {
+            zipcreation_send(0);
+        };
+        Runnable camera2Task = () -> {
+            zipcreation_send(1);
+        };
+        executor_zip.execute(camera1Task);
+        executor_zip.execute(camera2Task);
+    }
+
+    public void mode_select_send(int CameraID){
+        String zipcmdurl;
+        if (CameraID==0) {
+            zipcmdurl = ESP32_URL_camera1_base + mode_cmd;
+        }
+        else {
+            zipcmdurl = ESP32_URL_camera2_base + mode_cmd;
+        }
+
+//        String result;
+        try {
+            URL url = new URL(zipcmdurl);
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+            // Configure the connection
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(5000); // 5 seconds timeout
+            connection.setReadTimeout(5000);
+
+            // Read the response
+            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            StringBuilder response = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+            }
+            reader.close();
+
+            // Update the TextView with the response
+            Toast.makeText(this, response.toString(), Toast.LENGTH_LONG).show();
+        }
+        catch (Exception e) {
+            Log.e("mode_select", "Error during mode select: ", e);
+        }
+
+    }
+    public void ModeSelect(View view){
+        Runnable camera1Mode = () -> {
+            mode_select_send(0);
+        };
+        Runnable camera2Mode = () -> {
+            mode_select_send(1);
+        };
+        executor_mode.execute(camera1Mode);
+        executor_mode.execute(camera2Mode);
     }
 
     private void refreshMediaStore(File file) {
         Intent scanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
         scanIntent.setData(Uri.fromFile(file));
         sendBroadcast(scanIntent);
-    }
-
-    private String parseTimestampFromHeaders(byte[] data) {
-        // Parse the timestamp from the headers in the HTTP stream response.
-        // This will depend on the ESP32's format (e.g., look for "X-Timestamp" header if added).
-        // Placeholder: Replace with actual parsing logic.
-        return "timestamp_placeholder";
     }
 
     public static void copy(File src, File dst) throws IOException {
@@ -470,7 +810,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void convertFramesToMp4WithTimestamps(List<File> frames, Uri outputUri) {
+
+    private void convertFramesToMp4WithTimestamps(List<File> frames, String filename, String frames_dir, String prend_string) {
         List<File> frames_repeated = new ArrayList<>();
         Config.enableLogCallback(message -> {
             Log.d("FFmpegLog", message.getText());  // Direct FFmpeg logs to Android Logcat
@@ -488,6 +829,8 @@ public class MainActivity extends AppCompatActivity {
             int count=0;
             for (int i = 1; i < frames.size(); i++) {
                 File frame = frames.get(i-1);
+                addTimestampToImageFile(frame, timestamps.get(i), frame);
+
                 Log.d("FFmpegtimestamp", timestamps.get(i));  // Direct FFmpeg logs to Android Logcat
 
                 current_timestamp = extractTimestampFromString(timestamps.get(i));
@@ -496,7 +839,7 @@ public class MainActivity extends AppCompatActivity {
                 float duration = (current_timestamp-prev_timestamp)/1000.f;
                 int repeat = Math.round(duration/(1.0f/frameRate));
                 for (int j=0;j<repeat;j++){
-                    File dst = new File(framesDirectory, "frame_repeated_"+count+".jpg");
+                    File dst = new File(frames_dir, "frame_repeated_"+count+".jpg");
                     copy(frame,dst);
                     frames_repeated.add(dst);
                     count++;
@@ -504,11 +847,12 @@ public class MainActivity extends AppCompatActivity {
             }
 
             // Step 3: Use FFmpeg to encode frames to MP4 with timestamps
-            File mp4File = new File(framesDirectory, "video_converted_new.mp4");
+            String output_file_name ="video_converted_" + timestamps.get(0) + ".mp4";
+            File mp4File = new File(frames_dir, output_file_name);
             Log.d("FFmpegcmd", "before reaching to cmd!!");
 
             String ffmpegCommand =
-                    "-loglevel verbose -framerate "+frameRate+" -y -i "+framesDirectory+"/frame_repeated_%d.jpg -r 30 -c:v libx264 "+ mp4File.getAbsolutePath();
+                    "-loglevel verbose -framerate "+frameRate+" -y -i "+frames_dir+"/frame_repeated_%d.jpg -r 30 -c:v libx264 "+ mp4File.getAbsolutePath();
 
 
             try{
@@ -526,24 +870,12 @@ public class MainActivity extends AppCompatActivity {
             Log.d("framefile","frame list path is: "+listFile.getAbsolutePath() + " and mp4file path is: " + mp4File.getAbsolutePath());
 
 
-            // Step 4: Copy re-encoded MP4 to the output URI
-            try (InputStream mp4InputStream = new BufferedInputStream(new FileInputStream(mp4File));
-                 OutputStream outputStream = getContentResolver().openOutputStream(outputUri)) {
-
-                byte[] buffer = new byte[1024];
-                int bytesRead;
-                while ((bytesRead = mp4InputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                }
-            } catch (Exception e) {
-                Log.e("ReEncode", "Error during MP4 Encoding: ", e);
-            }
-            refreshMediaStore(mp4File);
-            Log.d("VideoConversion", "MP4 conversion and saving completed.");
         } catch (Exception e) {
             Log.e("FFmpeg", "Error during video conversion with timestamps", e);
         }
+
         deleteFrames(frames_repeated);
+
     }
 
     public void checkAndRequestPermissions() {
@@ -668,10 +1000,6 @@ private void deleteFrames(List<File> frames) {
             }
         }
     }
-//    private void playVideo(Uri uri) {
-//        videoView.setVideoURI(uri);
-//        videoView.start();
-//    }
 
     private void discoverESP32Ip() {
         new Thread(() -> {
