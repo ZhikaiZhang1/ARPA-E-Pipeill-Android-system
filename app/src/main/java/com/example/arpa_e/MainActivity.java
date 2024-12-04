@@ -55,6 +55,8 @@ import android.widget.Button;
 import android.widget.Toast;
 import android.database.Cursor;
 import androidx.documentfile.provider.DocumentFile;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 //192.168.134.42
 public class MainActivity extends AppCompatActivity {
     private static final String ESP32_HOSTNAME = "esp32-stream.local"; // ESP32 mDNS hostname
@@ -63,8 +65,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String ESP32_URL_camera1_base = "http://192.168.8.241:1000/"; // Change this to your ESP32's IP address
     private static final String ESP32_URL_camera2 = "http://192.168.134.42:1001/video"; // Change this to your ESP32's IP address
     private static final String ESP32_URL_camera2_base = "http://192.168.134.42:1001/"; // Change this to your ESP32's IP address
+    // ethernet settings
+    private static final String ethernet_address_camera1 = "192.168.8.45"; // Change this to your ESP32's IP address
+    private static final int camera1_ethernet_PORT = 100;
     private static final String zip_create_cmd = "createzip";
     private static final String mode_cmd = "mode_select";
+
+//    streaming video setup
+
 
     private VideoView videoView;
     private List<File> frames = new ArrayList<>();
@@ -82,10 +90,14 @@ public class MainActivity extends AppCompatActivity {
 
     private Handler download_update_handler = new Handler(Looper.getMainLooper());
     private Runnable updateDownloadTask;
+    File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
 
 
     int frameRate = 10;
-    private static final int PICK_VIDEO_REQUEST = 1;
+    private static final int PICK_VIDEO_REQUEST_1 = 1;
+    private static final int PICK_VIDEO_REQUEST_2 = 2;
+    private Uri PlayVideoUri1;
+    private Uri PlayVideoUri2;
 
     private File framesDirectory;
     private static final String TAG = "VideoEncoder";
@@ -95,6 +107,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int FRAME_RATE = 10;  // Frames per second
     private static final int BIT_RATE = 5000000;  // Bitrate for video (5Mbps)
     private static final int I_FRAME_INTERVAL = 5; // I-frames every 5 seconds
+
 
     private ActivityResultLauncher<Intent> pickVideoLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
@@ -131,6 +144,18 @@ public class MainActivity extends AppCompatActivity {
         modeESP32_1 = findViewById(R.id.modeESP32_1);
         modeESP32_2 = findViewById(R.id.modeESP32_2);
         updateStatus("Not Synced", "Not Synced", "0%", "0%", "WIFI", "WIFI");
+
+//        streaming settings
+        Button btnViewStream = findViewById(R.id.btnViewStream);
+        btnViewStream.setOnClickListener(v -> {
+            // Open the StreamActivity
+            Intent intent = new Intent(MainActivity.this, StreamActivity.class);
+
+            startActivity(intent);
+        });
+
+
+
     }
 
     private void updateDownloadStatusWithHandler(String download1, String download2) {
@@ -187,8 +212,52 @@ public class MainActivity extends AppCompatActivity {
         syncTimeWithESP32();
     }
     public void PLAY_VID(View view){
-        openVideoPicker();
+        Intent intent = new Intent(MainActivity.this, VideoSelectionActivity.class);
+        startActivity(intent);
+//        selectVideo(PICK_VIDEO_REQUEST_1);
     }
+
+    private void selectVideo(int requestCode) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+//        intent.setType("video/*");
+//        Log.d("playvideoLog", "before uri parse");
+        File basefolder = new File(downloadsDir, "received_frames"); //getCacheDir();
+        String folderpath = basefolder.getAbsolutePath();
+
+        Uri uri = Uri.parse(folderpath);
+//        Log.e("playvideoLog", "done uri parse");
+
+        intent.setDataAndType(uri,"video/*");
+        intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        if (requestCode == PICK_VIDEO_REQUEST_1) {
+            selectVideoLauncher1.launch(Intent.createChooser(intent, "Select First Video"));
+        } else {
+            selectVideoLauncher2.launch(Intent.createChooser(intent, "Select Second Video"));
+        }
+    }
+
+    private final ActivityResultLauncher<Intent> selectVideoLauncher1 =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    PlayVideoUri1 = result.getData().getData();
+                    selectVideo(PICK_VIDEO_REQUEST_2);
+                }
+            });
+
+    private final ActivityResultLauncher<Intent> selectVideoLauncher2 =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                    PlayVideoUri2 = result.getData().getData();
+                    if (PlayVideoUri1 != null && PlayVideoUri2 != null) {
+                        Intent intent = new Intent(MainActivity.this, VideoPlayActivity.class);
+                        intent.putExtra("PlayVideoUri1", PlayVideoUri1.toString());
+                        intent.putExtra("PlayVideoUri2", PlayVideoUri2.toString());
+                        startActivity(intent);
+                    }
+                }
+            });
 
     private void openVideoPicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -589,7 +658,7 @@ public class MainActivity extends AppCompatActivity {
         new Thread(() -> {
             try {
                 int frameNumber = 0;
-                File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+
                 framesDirectory = new File(downloadsDir, "received_frames"); //getCacheDir();
                 Log.d("received_frames_dir", framesDirectory.getAbsolutePath());
 
@@ -1014,5 +1083,7 @@ private void deleteFrames(List<File> frames) {
             }
         }).start();
     }
+
+
 
 }

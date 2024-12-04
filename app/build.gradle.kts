@@ -41,7 +41,7 @@ dependencies {
     implementation(libs.constraintlayout)
     implementation("com.arthenica:mobile-ffmpeg-full-gpl:4.4.LTS")
 //    implementation(":opencv")
-
+//    implementation ("com.github.nbsp:android-support-v4-preferencefragment:6.0.1")
 //    implementation("org.apache.jmdns:jmdns:3.5.5")
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
