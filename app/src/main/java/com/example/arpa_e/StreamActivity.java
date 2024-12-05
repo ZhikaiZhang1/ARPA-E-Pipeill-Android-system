@@ -26,7 +26,7 @@ public class StreamActivity extends AppCompatActivity {
         LINE, BYTE
     }
     private Mode mode = Mode.LINE;
-    private byte[] buffer = new byte[64];
+    private byte[] buffer = new byte[1024];
     private ByteArrayOutputStream allbyteBuffer = new ByteArrayOutputStream();
     private StringBuilder lineBuffer = new StringBuilder();  // For accumulating line data
     private int bufSize = 0;  // Expected size for image data
@@ -68,7 +68,7 @@ public class StreamActivity extends AppCompatActivity {
 
             while (isStreaming) {
 
-                processReceivedData(buffer,inputStream);
+                processReceivedData(inputStream);
 
                 // Decode raw JPEG frame
 
@@ -89,15 +89,16 @@ public class StreamActivity extends AppCompatActivity {
     public byte[] getRawBytes(ByteArrayOutputStream byteBuffer) {
         return byteBuffer.toByteArray();
     }
-    private void processReceivedData(byte[] buffer,InputStream inputStream) {
+    private void processReceivedData(InputStream inputStream) {
         try {
+            byte[] buffer = new byte[64];
             int bytesRead = inputStream.read(buffer);
             String receivedData = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
 
             if (mode == Mode.LINE) {
                 // Accumulate data in line buffer
                 lineBuffer.append(receivedData);
-                allbyteBuffer.write(buffer);
+                allbyteBuffer.write(buffer, 0, bytesRead);
 
 
                 // Process complete lines using maxsplit equivalent
@@ -117,28 +118,31 @@ public class StreamActivity extends AppCompatActivity {
                 int index = receivedData.indexOf(needle);
                 if (index != -1) {
                     int newlineIndex_after = receivedData.indexOf("\n", index);
+                    if (newlineIndex_after<0){
+                        newlineIndex_after = 0;
+                    }
                     // Substring exists, append the content before the index to StringBuilder
                     lineBuffer.append(receivedData.substring(0, index));
                     // only write first index bytes to allbytebuffer
-                    allbyteBuffer.write(buffer, index+1, buffer.length - index - 1);
+                    allbyteBuffer.write(buffer, 0, index);
 
 //                    removeProcessedBytes(newlineIndex + 1);
                     Log.d(TAG, "an entire image has been sent, actual length is: " + frame_bytes_received);
 
 
-                    frame_bytes_received = 0;
                     byte[] buffer_temp = lineBuffer.toString().getBytes(StandardCharsets.UTF_8);
                     byte[] raw_buffer = getRawBytes(allbyteBuffer);
 
                     byte[] imageData = new byte[raw_buffer.length];
                     System.arraycopy(raw_buffer, 0, imageData, 0, raw_buffer.length);
-//                    lineBuffer.delete(0, lineBuffer.length());
                     lineBuffer.setLength(0);
                     allbyteBuffer.reset();
                     lineBuffer.append(receivedData.substring(newlineIndex_after+1));
                     //TODO append the rest to allbyteBuffer
-                    byte[] temp_bytes = Arrays.copyOfRange(buffer, newlineIndex_after+1, buffer.length);
+                    byte[] temp_bytes = Arrays.copyOfRange(buffer, newlineIndex_after+1, bytesRead);
                     allbyteBuffer.write(temp_bytes);
+                    frame_bytes_received = 0;
+
 
 
                     // Process image data (e.g., convert to Bitmap or save as a file)
@@ -219,21 +223,20 @@ public class StreamActivity extends AppCompatActivity {
     }
 
     private void re_encode_img(byte[] frameBuffer, int frameSize){
-        Log.d("JPEG Check", "First 5 bytes: " + Arrays.toString(Arrays.copyOfRange(frameBuffer, 0, 5)));
+//        Log.d("JPEG Check", "First 20 bytes: " + Arrays.toString(Arrays.copyOfRange(frameBuffer, 0, 20)));
         Bitmap bitmap = BitmapFactory.decodeByteArray(frameBuffer, 0, frameSize);
         if (bitmap == null){
             Log.d(TAG, "bitmap null");
-
         }
-        Bitmap resizedBitmap = Bitmap.createScaledBitmap(bitmap, imgW, imgH, true);
+//        Bitmap resizedBitmap = Bitmap.createScaledBitmap(bitmap, imgW, imgH, true);
 
-        if (resizedBitmap != null) {
+        if (bitmap != null) {
             Log.d(TAG, "after bitmap");
 
 
             // Re-encode as JPEG
             ByteArrayOutputStream encodedOutput = new ByteArrayOutputStream();
-            resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 90, encodedOutput);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, encodedOutput);
             byte[] jpegBytes = encodedOutput.toByteArray();
             Bitmap jpegBitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.length);
 
