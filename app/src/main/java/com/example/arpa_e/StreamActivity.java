@@ -32,10 +32,12 @@ public class StreamActivity extends AppCompatActivity {
     private int bufSize = 0;  // Expected size for image data
 
     private ImageView streamImageView;
+    private ImageView streamImageView2;
     private boolean isStreaming = true;
     private int frame_bytes_received = 0;
     int imgW;
     int imgH;
+    int CameraID;
 //    InputStream inputStream;
     Socket socket;
 
@@ -44,6 +46,8 @@ public class StreamActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_stream);
         streamImageView = findViewById(R.id.streamImageView);
+        streamImageView2 = findViewById(R.id.streamImageView2);
+
         Button btnStopStream = findViewById(R.id.btnStopStream);
 
         // Start streaming in a separate thread
@@ -147,7 +151,9 @@ public class StreamActivity extends AppCompatActivity {
 
                     // Process image data (e.g., convert to Bitmap or save as a file)
                     Log.d(TAG, "handleImageData started, raw_buffer.length is: " + raw_buffer.length + " linebuffer length is: " + lineBuffer.length() + " imageData length is: " + imageData.length);
-
+                    if (receivedData.substring(index + 1).contains(needle)){
+                        Log.d(TAG,"bad handling with camera-end still in it, data is: " + receivedData.substring(index + 1));
+                    }
                     handleImageData(raw_buffer);
 
                     mode = Mode.LINE;  // Switch back to LINE mode after processing
@@ -172,7 +178,7 @@ public class StreamActivity extends AppCompatActivity {
         // imageView.setImageBitmap(bitmap);
 //        new Thread(() -> {
             try {
-                re_encode_img(imageData, imageData.length);
+                re_encode_img(imageData, imageData.length, CameraID);
             } catch (Exception e) {
                 Log.e(TAG, "Error encoding frames", e);
             }
@@ -204,9 +210,10 @@ public class StreamActivity extends AppCompatActivity {
                     imgH = Integer.parseInt(parts[2]);
                     bufSize = Integer.parseInt(parts[3]);  // Expected binary data size
                     int imgStamp = Integer.parseInt(parts[4]);
+                    CameraID = Integer.parseInt(parts[5]);
                     mode = Mode.BYTE;  // Switch to BYTE mode for receiving image data
 
-                    Log.d(TAG, "Camera Info: " + imgW + "x" + imgH + ", Buffer size: " + bufSize);
+                    Log.d(TAG, "Camera Info: " + imgW + "x" + imgH + ", Buffer size: " + bufSize + " CameraID" + CameraID);
                 }
                 break;
 
@@ -222,7 +229,7 @@ public class StreamActivity extends AppCompatActivity {
         }
     }
 
-    private void re_encode_img(byte[] frameBuffer, int frameSize){
+    private void re_encode_img(byte[] frameBuffer, int frameSize, int camerid){
 //        Log.d("JPEG Check", "First 20 bytes: " + Arrays.toString(Arrays.copyOfRange(frameBuffer, 0, 20)));
         Bitmap bitmap = BitmapFactory.decodeByteArray(frameBuffer, 0, frameSize);
         if (bitmap == null){
@@ -243,7 +250,15 @@ public class StreamActivity extends AppCompatActivity {
 
             // Display re-encoded frame
 //            runOnUiThread(() -> streamImageView.setVisibility(View.VISIBLE));
-            runOnUiThread(() -> streamImageView.setImageBitmap(jpegBitmap));
+            if (camerid == 0) {
+                Log.d(TAG, "first image stream");
+                runOnUiThread(() -> streamImageView.setImageBitmap(jpegBitmap));
+            }
+            else{
+                Log.d(TAG, "second image stream");
+
+                runOnUiThread(() -> streamImageView2.setImageBitmap(jpegBitmap));
+            }
         }
     }
 

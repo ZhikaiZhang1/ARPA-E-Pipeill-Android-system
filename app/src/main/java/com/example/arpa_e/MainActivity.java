@@ -61,10 +61,10 @@ import androidx.recyclerview.widget.RecyclerView;
 public class MainActivity extends AppCompatActivity {
     private static final String ESP32_HOSTNAME = "esp32-stream.local"; // ESP32 mDNS hostname
     private String esp32Ip = null; // Store the discovered IP here
-    private static final String ESP32_URL_camera1 = "http://192.168.8.241:1000/video"; // Change this to your ESP32's IP address
-    private static final String ESP32_URL_camera1_base = "http://192.168.8.241:1000/"; // Change this to your ESP32's IP address
-    private static final String ESP32_URL_camera2 = "http://192.168.134.42:1001/video"; // Change this to your ESP32's IP address
-    private static final String ESP32_URL_camera2_base = "http://192.168.134.42:1001/"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera1 = "http://192.168.8.212:1000/video"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera1_base = "http://192.168.8.212:1000/"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera2 = "http://192.168.8.241:1001/video"; // Change this to your ESP32's IP address
+    private static final String ESP32_URL_camera2_base = "http://192.168.8.241:1001/"; // Change this to your ESP32's IP address
     // ethernet settings
     private static final String ethernet_address_camera1 = "192.168.8.45"; // Change this to your ESP32's IP address
     private static final int camera1_ethernet_PORT = 100;
